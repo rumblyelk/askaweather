@@ -43,3 +43,44 @@ async def get_weather(location: str, date: Optional[str] = None) -> Dict[str, An
             return {"error": f"WeatherAPI returned {response.status_code}: {response.text}"}
             
         return response.json()
+
+async def get_sports(location: str) -> Dict[str, Any]:
+    """
+    Fetches sports data from WeatherAPI.com.
+    """
+    if not WEATHERAPI_KEY:
+        raise ValueError("WEATHERAPI_KEY environment variable is not set")
+
+    async with httpx.AsyncClient() as client:
+        params = {
+            "key": WEATHERAPI_KEY,
+            "q": location,
+        }
+        
+        response = await client.get(f"{BASE_URL}/sports.json", params=params)
+
+        if response.status_code != 200:
+            return {"error": f"WeatherAPI returned {response.status_code}: {response.text}"}
+            
+        return response.json()
+
+async def get_air_quality(location: str) -> Dict[str, Any]:
+    """
+    Fetches air quality data from WeatherAPI.com.
+    """
+    if not WEATHERAPI_KEY:
+        raise ValueError("WEATHERAPI_KEY environment variable is not set")
+
+    async with httpx.AsyncClient() as client:
+        params = {
+            "key": WEATHERAPI_KEY,
+            "q": location,
+            "aqi": "yes"
+        }
+        
+        response = await client.get(f"{BASE_URL}/current.json", params=params)
+
+        if response.status_code != 200:
+            return {"error": f"WeatherAPI returned {response.status_code}: {response.text}"}
+            
+        return response.json()

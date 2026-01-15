@@ -3,7 +3,7 @@ import json
 from typing import List, Dict, Any, cast
 from anthropic import AsyncAnthropic
 from anthropic.types import MessageParam, ToolParam, TextBlock, ToolUseBlock
-from app.weatherapi import get_weather
+from app.weatherapi import get_weather, get_sports, get_air_quality
 from app.dates import get_current_date, resolve_relative_date
 
 # Initialize Anthropic client
@@ -29,13 +29,46 @@ WEATHER_TOOL: ToolParam = {
     }
 }
 
+SPORTS_TOOL: ToolParam = {
+    "name": "get_sports",
+    "description": "Get recent or upcoming sports events/scores for a location. Covers Football, Cricket, and Golf.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string",
+                "description": "The city or region (e.g. 'London', 'Madrid')"
+            }
+        },
+        "required": ["location"]
+    }
+}
+
+AQI_TOOL: ToolParam = {
+    "name": "get_air_quality",
+    "description": "Get current air quality index (AQI) and pollutant levels.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string",
+                "description": "The city to check air quality for"
+            }
+        },
+        "required": ["location"]
+    }
+}
+
 SYSTEM_PROMPT = f"""
-You are Askaweather, a helpful weather assistant.
+You are Askaweather, a helpful weather and lifestyle assistant.
 Today's date is {get_current_date()}.
 
 RULES:
-1. You must answer user questions about the weather using the 'get_weather' tool.
-2. NEVER guess weather data. You must always use the tool.
+1. You must answer user questions about weather, sports, or air quality using the appropriate tools:
+   - Use 'get_weather' for forecasts, temperature, rain, etc.
+   - Use 'get_sports' for match schedules, scores, or upcoming games (Football, Cricket, Golf).
+   - Use 'get_air_quality' for pollution, AQI, or air cleanliness inquiries.
+2. NEVER guess data. You must always use the tools.
 3. If the user does not provide a location, you MUST ask for it.
 4. If the user does not provide a timeframe (e.g., "weather in Berlin"), ask "For which day or time?" OR assume today if the context implies it, but preferably ask.
 5. Ask strictly ONE clarifying question per turn. Do not overload the user.
@@ -66,7 +99,7 @@ async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Di
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=messages,
-            tools=[WEATHER_TOOL]
+            tools=[WEATHER_TOOL, SPORTS_TOOL, AQI_TOOL]
         )
     except Exception as e:
         return {"role": "assistant", "content": f"I encountered an error contacting my brain: {str(e)}"}
@@ -87,6 +120,8 @@ async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Di
                 tool_inputs = cast(Dict[str, Any], tool_use_block.input)
                 tool_use_id = tool_use_block.id
                 
+                tool_result_content = ""
+
                 if tool_name == "get_weather":
                     # Ensure values are strings for type safety
                     location = str(tool_inputs.get("location"))
@@ -98,12 +133,23 @@ async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Di
                         final_date = resolve_relative_date(str(date_input))
                     
                     weather_data = await get_weather(location, final_date)
-                    
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": json.dumps(weather_data)
-                    })
+                    tool_result_content = json.dumps(weather_data)
+
+                elif tool_name == "get_sports":
+                    location = str(tool_inputs.get("location"))
+                    sports_data = await get_sports(location)
+                    tool_result_content = json.dumps(sports_data)
+                
+                elif tool_name == "get_air_quality":
+                    location = str(tool_inputs.get("location"))
+                    aqi_data = await get_air_quality(location)
+                    tool_result_content = json.dumps(aqi_data)
+                
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": tool_result_content
+                })
             
             if tool_results:
                 # The assistant's message that invoked the tools
@@ -127,7 +173,7 @@ async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Di
                         max_tokens=1024,
                         system=SYSTEM_PROMPT,
                         messages=updated_messages,
-                        tools=[WEATHER_TOOL]
+                        tools=[WEATHER_TOOL, SPORTS_TOOL, AQI_TOOL]
                     )
                 except Exception as e:
                     return {"role": "assistant", "content": f"I encountered an error contacting my brain: {str(e)}"}

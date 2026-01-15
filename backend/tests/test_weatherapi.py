@@ -78,3 +78,53 @@ async def test_get_weather_api_error():
             result = await get_weather("InvalidCity", None)
             assert "error" in result
             assert "WeatherAPI returned 400" in result["error"]
+
+@pytest.mark.asyncio
+async def test_get_sports_success():
+    mock_data = {
+        "football": [{"match": "Team A vs Team B", "start": "2024-03-20 18:00"}],
+        "cricket": [],
+        "golf": []
+    }
+    
+    with patch("app.weatherapi.WEATHERAPI_KEY", "dummy_key"):
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_data
+            mock_client.get.return_value = mock_response
+
+            # We need to import get_sports here or at top level if not already imported
+            from app.weatherapi import get_sports
+            result = await get_sports("London")
+            
+            assert "football" in result
+            assert result["football"][0]["match"] == "Team A vs Team B"
+
+@pytest.mark.asyncio
+async def test_get_air_quality_success():
+    mock_data = {
+        "location": {"name": "Beijing"},
+        "current": {
+            "air_quality": {"pm2_5": 10.0, "us-epa-index": 1}
+        }
+    }
+    
+    with patch("app.weatherapi.WEATHERAPI_KEY", "dummy_key"):
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_data
+            mock_client.get.return_value = mock_response
+
+            from app.weatherapi import get_air_quality
+            result = await get_air_quality("Beijing")
+            
+            assert "air_quality" in result["current"]
+            assert result["current"]["air_quality"]["pm2_5"] == 10.0
