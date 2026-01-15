@@ -139,6 +139,8 @@ async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Di
                 
                 tool_result_content = ""
 
+                print(f"Invoking tool: {tool_name} with inputs: {tool_inputs}")
+
                 if tool_name == "get_weather":
                     location = str(tool_inputs.get("location"))
                     date_input = tool_inputs.get("date")
@@ -163,6 +165,8 @@ async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Di
                     "tool_use_id": tool_use_id,
                     "content": tool_result_content
                 })
+            
+            print(f"Tool results: {tool_results}")
             
             # Append the assistant's tool-use message
             messages.append({
