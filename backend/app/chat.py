@@ -70,7 +70,10 @@ RULES:
    - Use 'get_air_quality' for pollution, AQI, or air cleanliness inquiries.
 2. NEVER guess data. You must always use the tools.
 3. If the user does not provide a location, you MUST ask for it.
-4. If the user does not provide a timeframe (e.g., "weather in Berlin"), ask "For which day or time?" OR assume today if the context implies it, but preferably ask.
+4. If a user asks a complex question (e.g. "Will it rain during the next game?"), break it down:
+   - First, find the date/time of the event using 'get_sports'.
+   - Then, use that date to check the forecast with 'get_weather'.
+   - Do NOT ask the user for the date if you can find it yourself.
 5. Ask strictly ONE clarifying question per turn. Do not overload the user.
 6. If the user's intent is unclear, ask for clarification.
 7. Be concise and natural.
@@ -78,38 +81,52 @@ RULES:
 
 async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Dict[str, str]:
     """
-    Orchestrates the conversation:
+    Orchestrates the conversation with a tool loop:
     1. Sends messages + tool def to Claude.
     2. Checks if Claude wants to call a tool.
-    3. If tool call: execute it, append result, and call Claude again for final answer.
+    3. If tool call: execute it, append result, and LOOP back to step 1.
     4. If no tool call: return Claude's text response.
+    
+    Limits the loop to avoid infinite recursion.
     """
+    MAX_TURNS = 5
+    current_turn = 0
     
     # Convert generic dicts to MessageParam to satisfy type checker
-    # We trust the input structure matches MessageParam (role, content)
     messages: List[MessageParam] = [
         {"role": m["role"], "content": m["content"]}  # type: ignore[misc]
         for m in conversation_history
     ]
 
-    # 1. First call to Claude
-    try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=messages,
-            tools=[WEATHER_TOOL, SPORTS_TOOL, AQI_TOOL]
-        )
-    except Exception as e:
-        return {"role": "assistant", "content": f"I encountered an error contacting my brain: {str(e)}"}
+    while current_turn < MAX_TURNS:
+        try:
+            response = await client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                messages=messages,
+                tools=[WEATHER_TOOL, SPORTS_TOOL, AQI_TOOL]
+            )
+        except Exception as e:
+            return {"role": "assistant", "content": f"I encountered an error contacting my brain: {str(e)}"}
 
-    stop_reason = response.stop_reason
-    final_content = response.content
+        stop_reason = response.stop_reason
+        final_content = response.content
 
-    # 2. Check for tool use
-    if stop_reason == "tool_use":
-        # Find all tool use blocks
+        # If Claude simply replies with text (end_turn), we are done.
+        if stop_reason != "tool_use":
+            text_content = ""
+            for block in final_content:
+                if isinstance(block, TextBlock):
+                    text_content += block.text
+            
+            if not text_content:
+                 # Fallback if empty
+                 return {"role": "assistant", "content": "I'm not sure how to help with that."}
+            
+            return {"role": "assistant", "content": text_content}
+
+        # If we are here, stop_reason is "tool_use". Handle the tools.
         tool_use_blocks = [b for b in final_content if isinstance(b, ToolUseBlock)]
         
         if tool_use_blocks:
@@ -123,15 +140,11 @@ async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Di
                 tool_result_content = ""
 
                 if tool_name == "get_weather":
-                    # Ensure values are strings for type safety
                     location = str(tool_inputs.get("location"))
                     date_input = tool_inputs.get("date")
-                    
                     final_date = None
                     if date_input:
-                        # Use our robust date resolver here!
                         final_date = resolve_relative_date(str(date_input))
-                    
                     weather_data = await get_weather(location, final_date)
                     tool_result_content = json.dumps(weather_data)
 
@@ -151,48 +164,19 @@ async def process_conversation(conversation_history: List[Dict[str, Any]]) -> Di
                     "content": tool_result_content
                 })
             
-            if tool_results:
-                # The assistant's message that invoked the tools
-                assistant_tool_msg: MessageParam = {
-                    "role": "assistant",
-                    "content": final_content  # type: ignore[typeddict-item]
-                }
-                
-                # The result message containing all results
-                tool_result_msg: MessageParam = {
-                    "role": "user",
-                    "content": tool_results
-                }
-                
-                # 3. Second call to Claude with tool results
-                updated_messages = messages + [assistant_tool_msg, tool_result_msg]
-                
-                try:
-                    response_2 = await client.messages.create(
-                        model="claude-haiku-4-5",
-                        max_tokens=1024,
-                        system=SYSTEM_PROMPT,
-                        messages=updated_messages,
-                        tools=[WEATHER_TOOL, SPORTS_TOOL, AQI_TOOL]
-                    )
-                except Exception as e:
-                    return {"role": "assistant", "content": f"I encountered an error contacting my brain: {str(e)}"}
-                
-                # Extract text content
-                text_content = ""
-                for block in response_2.content:
-                    if isinstance(block, TextBlock):
-                        text_content += block.text
-                
-                return {"role": "assistant", "content": text_content}
+            # Append the assistant's tool-use message
+            messages.append({
+                "role": "assistant",
+                "content": final_content  # type: ignore[typeddict-item]
+            })
+            
+            # Append the results as a user message
+            messages.append({
+                "role": "user",
+                "content": tool_results
+            })
+            
+            # Increment turn counter and LOOP again
+            current_turn += 1
 
-    # If no tool use, just return the text
-    text_content = ""
-    for block in final_content:
-        if isinstance(block, TextBlock):
-             text_content += block.text
-             
-    if text_content:
-        return {"role": "assistant", "content": text_content}
-        
-    return {"role": "assistant", "content": "I'm not sure how to help with that."}
+    return {"role": "assistant", "content": "I apologize, but I needed too many steps to answer your request."}
